@@ -1,0 +1,26 @@
+{
+    "name": "azandrewsidoine/auth",
+    "type": "project",
+    "require": {
+        "drewlabs/curl-rest-client": "^0.2.3",
+        "drewlabs/rest-query": "^0.1.22",
+        "drewlabs/overloadable": "^0.1.10",
+        "vlucas/phpdotenv": "^5.5"
+    },
+    "require-dev": {
+        "drewlabs/mdl-cli": "^0.2.0"
+    },
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Drewlabs\\Identity\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "azandrew-sidoine",
+            "email": "asmyns.platonnas29@gmail.com"
+        }
+    ],
+    "minimum-stability": "stable"
+}

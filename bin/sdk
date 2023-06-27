@@ -1,0 +1,432 @@
+#!/usr/bin/env php
+<?php
+
+use Drewlabs\Identity\API;
+use Drewlabs\Identity\AuthorizationGroupRequestBodyBuilder;
+use Drewlabs\Identity\AuthorizationRequestBodyBuilder;
+use Drewlabs\Identity\Console\Console;
+use Drewlabs\Identity\Console\Options;
+use Drewlabs\Identity\EnvRepository;
+use Drewlabs\RestQuery\QueryBuilder;
+use Dotenv\Exception\InvalidPathException;
+use Dotenv\Exception\InvalidEncodingException;
+use Dotenv\Exception\InvalidFileException;
+use Drewlabs\Identity\UserRequestBodyBuilder;
+
+require __DIR__ . '/../vendor/autoload.php';
+
+//#region IO
+
+/**
+ * Recursively create directory if the later does not exists
+ * 
+ * @param string $dirname 
+ * @return void 
+ */
+function auth_sdk_create_directory_if_not_exists(string $dirname)
+{
+    // Create the path directory if not exists
+    if (!is_dir($dirname)) {
+        mkdir($dirname, 0777, true);
+    }
+}
+
+function auth_sdk_resolve_parent_directory_path(string $path, string $base = __DIR__)
+{
+    $substr = substr($path, 0, 3);
+    // Handle relative path
+    if (('../' === $substr) || ('..\\' === $substr)) {
+        $directory = $base;
+        $_substr = substr($path, 0, 3);
+        while (('../' === $_substr) || ('..\\' === $_substr)) {
+            $directory = dirname($directory);
+            $path = substr($path, 3);
+            $_substr = substr($path, 0, 3);
+        }
+        $path = $directory . DIRECTORY_SEPARATOR . $path;
+    }
+
+    return $path;
+}
+
+function auth_sdk_resolve_relative_path($path, string $base = __DIR__)
+{
+    $substr = substr($path, 0, 2);
+    // Handle relative path
+    if (('./' === $substr) || ('.\\' === $substr)) {
+        $path = $base . DIRECTORY_SEPARATOR . substr($path, 2);
+    }
+    return $path;
+}
+
+function auth_sdk_resolve_path(string $path, string $base = __DIR__)
+{
+    $substr = substr($path, 0, 3);
+    $path = ('../' === $substr) || ('..\\' === $substr) ? auth_sdk_resolve_parent_directory_path($path, $base) : (($subsustr = substr($substr, 0, 2)) && (('./' === $subsustr) || ('.\\' === $subsustr)) ? auth_sdk_resolve_relative_path($path, $base) : $path);
+    // If the path does not starts with '/' we append the current 
+    if ('/' !== substr($path, 0, 1)) {
+        $path = $base . DIRECTORY_SEPARATOR . $path;
+    }
+    return $path;
+}
+//#endregion IO
+
+/**
+ * Read json document
+ * 
+ * @param string $path 
+ * @return \Traversable
+ */
+function read_json(string $path)
+{
+    if (file_exists($path) && is_readable($path)) {
+        return new ArrayIterator(json_decode(file_get_contents($path), true));
+    }
+    return new \ArrayIterator([]);
+}
+
+
+/**
+ * Load environment variables from `.env` file directory
+ * 
+ * @param string $directory 
+ * @param string|string[] $names
+ * @return void 
+ * @throws InvalidPathException 
+ * @throws InvalidEncodingException 
+ * @throws InvalidFileException 
+ */
+function load_env(string $directory, $names = null, array $required = [])
+{
+    $dotenv = \Dotenv\Dotenv::createImmutable($directory, $names);
+    $dotenv->safeLoad();
+    if (!empty($required)) {
+        $dotenv->required($required)->notEmpty();
+    }
+    return;
+}
+
+function help_function()
+{
+    $message = <<<EOT
+    Identity service SDK binary
+    
+    USAGE:
+        ./vendor/bin/sdk <SUBCOMMAND> [OPTIONS]
+    
+    FLAGS:
+        -h, --help
+            Prints help information
+
+    SUBCOMMAND
+        users               Create list of users on the identity service
+        authorizations      Creates list of authorizations on the identity service
+        groups              Creates a list of groups on the identity service
+    
+    OPTIONS:
+        --input             Path to the json / yaml input [required]
+        --env               Path to .env environment file
+        --baseDir           The base directory from which paths are resolved
+
+
+EOT;
+    return $message;
+}
+
+/**
+ * Query for authorizations maching a given `label` or a list of `labels`
+ * @param string|string[] $label 
+ * @param array $columns 
+ * @return array 
+ */
+function auth_sdk_get_authorizations($label, $columns = ['*'])
+{
+    return ((object)(API::authorizations()
+        ->withBearerAuthorization(EnvRepository::getInstance()->get('_bearerToken'))
+        ->select(QueryBuilder::new()
+            ->in('label', is_string($label) ? [$label] : $label)
+            ->select($columns))))->data;
+}
+
+/**
+ * Query for authorization maching a given `label` or a list of `labels`
+ * 
+ * @param string|string[] $groups 
+ * @param array $columns 
+ * @return array 
+ */
+function auth_sdk_get_groups($groups, array $columns = ['*'])
+{
+    return ((object)(API::groups()
+        ->withBearerAuthorization(EnvRepository::getInstance()->get('_bearerToken'))
+        ->select(QueryBuilder::new()
+            ->in('label', is_string($groups) ? [$groups] : $groups)
+            ->select($columns))))->data;
+}
+
+/**
+ * creates a list of authorizations
+ * 
+ * @param mixed $values 
+ * @return void 
+ */
+function auth_sdk_create_authorizations($values)
+{
+    printf("Performing requests, please wait...\n");
+    foreach ($values as $value) {
+        if (!is_array($value)) {
+            continue;
+        }
+        if (!isset($value['label'])) {
+            continue;
+        }
+        try {
+            if (!empty($result = auth_sdk_get_authorizations($value['label']))) {
+                printf("Authorization %s already exists, processing next request...\n", Console::white($value['label'], null, 'blue'));
+                continue;
+            }
+            printf("Creating %s authorization...\n", $value['label']);
+            $response = API::authorizations()
+                ->withBearerAuthorization(EnvRepository::getInstance()->get('_bearerToken'))
+                ->create(AuthorizationRequestBodyBuilder::new()
+                    ->setLabel($value['label'])
+                    ->setDescription($value['description'] ?? $value['label'])
+                    ->build());
+            $response = (object)$response;
+            printf("\nRequest result: \n");
+            printf("\tID : %d, Label: %s\n", $response->id, $response->label);
+        } catch (\Drewlabs\Curl\REST\Exceptions\BadRequestException $e) {
+            printf("\nResponse: %s\n", "/POST api/v2/authorizations");
+            printf("\tStatus Code: %d\n", $e->getResponse()->getStatus());
+            printf("\tReason Phrase:\n", $e->getResponse()->getStatusText());
+            continue;
+        }
+    }
+}
+
+/**
+ * Creates a list of authorization groups
+ * 
+ * @param mixed $values 
+ * @return void 
+ */
+function auth_sdk_create_groups($values)
+{
+    printf("Performing requests, please wait...\n");
+    foreach ($values as $value) {
+        if (!is_array($value)) {
+            continue;
+        }
+        if (!isset($value['label'])) {
+            continue;
+        }
+        try {
+
+            if (!empty($result = auth_sdk_get_groups($value['label']))) {
+                printf("Group %s already exists, processing next request...\n", Console::white($value['label'], null, 'blue'));
+                continue;
+            }
+            // TODO: Query for authorizations
+            $authorizations = [];
+            if (isset($value['authorizations'])) {
+                printf("Fetching for authorization please wait...\n");
+                $authorizations = array_values(array_filter(array_map(function ($value) {
+                    return isset($value['id']) ? $value['id'] : null;
+                }, auth_sdk_get_authorizations($value['authorizations'], ['id'])), function ($item) {
+                    return null !== $item;
+                }));
+            }
+            printf("Creating %s authorization group...\n", $value['label']);
+            // TODO create authorization group
+            $response = API::groups()
+                ->withBearerAuthorization(EnvRepository::getInstance()->get('_bearerToken'))
+                ->create(AuthorizationGroupRequestBodyBuilder::new()
+                    ->setLabel($value['label'])
+                    ->setDescription($value['description'] ?? $value['label'])
+                    ->setAuthorizations($authorizations)
+                    ->build());
+        } catch (\Drewlabs\Curl\REST\Exceptions\BadRequestException $e) {
+            printf("\nResponse: %s\n", "/POST api/v2/authorizations");
+            printf("\tStatus Code: %d\n", $e->getResponse()->getStatus());
+            printf("\tReason Phrase:\n", $e->getResponse()->getStatusText());
+            continue;
+        }
+        $response = (object)$response;
+        printf("\nRequest result: \n");
+        printf("\tID : %d, Label: %s\n", $response->id, $response->label);
+    }
+}
+
+/**
+ * Create user from `$attributes` parameter
+ * 
+ * @param array $attributes 
+ * @return object 
+ */
+function auth_sdk_create_user(array $attributes)
+{
+    printf("Creating application user... %s, %s\n", $attributes['firstname'], $attributes['lastname']);
+    return (object)(API::users()
+        ->withBearerAuthorization(EnvRepository::getInstance()->get('_bearerToken'))
+        ->create(UserRequestBodyBuilder::new()
+            ->setFirstname($attributes['firstname'])
+            ->setLastname($attributes['lastname'])
+            ->setPassword($attributes['password'])
+            ->setActive($attributes['active'] ?? true)
+            ->setVerified($attributes['verified'] ?? true)
+            ->setEmail($attributes['email'] ??  null)
+            ->build()));
+}
+
+/**
+ * creates users on the identity web sevice
+ * 
+ * @param array $values 
+ * @return void 
+ */
+function auth_sdk_create_users($values = [])
+{
+    $index = -1;
+    printf("Performing requests, please wait...\n");
+    foreach ($values as $value) {
+        // Increment the index
+        $index++;
+
+        // TODO: Case the value is not an array print a message to the user
+        if (!is_array($value)) {
+            continue;
+        }
+
+        // TODO: Case required filed are not present, print a message to the user
+        if (!isset($value['firstname']) || !isset($value['lastname']) || !isset($value['email']) || !isset($value['password'])) {
+            continue;
+        }
+        try {
+            // TODO create authorization group
+            $user = !isset($value['id']) ? auth_sdk_create_user($value) : null;
+            // Query for the user id
+            $userId = null !== $user ? $user->id : $value['id'] ?? null;
+
+            // Query for the group instance
+            $userGroups = $value['roles'] ?? $value['groups'] ?? null;
+
+            if ((null !== $userGroups) && (null !== $userId)) {
+                printf("Fetching for authorization groups, please wait...\n");
+                // filters the group returned by the API
+                $groups = array_values(array_filter(array_map(function ($group) {
+                    return isset($group['id']) ? $group['id'] : null;
+                }, auth_sdk_get_groups($userGroups, ['id'])), function ($item) {
+                    return null !== $item;
+                }));
+
+                // Case groups is not empty, update the user with the group
+                if (!empty($groups)) {
+                    printf("Updating user groups...\n");
+                    $user = (object)(API::users()
+                        ->withBearerAuthorization(EnvRepository::getInstance()->get('_bearerToken'))
+                        ->update($userId, UserRequestBodyBuilder::new()->setAuthorizationGroups($groups)->build()));
+                }
+            }
+            if ($user) {
+                printf("\nRequest result: \n");
+                printf("\tID : %d, Label: %s\n", $user->id, $user->username);
+                return;
+            }
+            printf("No user created or updated, please check your configuration for object at %d\n");
+        } catch (\Drewlabs\Curl\REST\Exceptions\BadRequestException $e) {
+            printf("Error while creating user at index: %d \n", $index);
+            printf("\nResponse: %s\n", "/POST api/v2/users");
+            printf("\tStatus Code: %d\n", $e->getResponse()->getStatus());
+            printf("\tReason Phrase:\n", $e->getResponse()->getStatusText());
+            continue;
+        }
+    }
+}
+
+/**
+ * Program starting point
+ * 
+ * @param array $args 
+ * @return void 
+ * @throws InvalidPathException 
+ * @throws InvalidEncodingException 
+ * @throws InvalidFileException 
+ */
+function main(array $args = [])
+{
+    // Program description
+    echo Console::normal("Program - Identity SDK Binary", null, 'blue') . PHP_EOL . PHP_EOL;
+    // #region Load command line arguments and options
+    // In case the list of arguments starts with - or --, the command input configuration is the last parameter, else it's the first parameter
+    if (empty($args)) {
+        list($optionsArgs, $command) = [[], null];
+    } else if ('-' === substr(strval($args[0]), 0, 1)) {
+        // Case the total list of argument is 1 or the last element starts with - or --, we do not treat the last argument as command argument
+        $optionsArgs = array_slice($args, 0, ((count($args) === 1) || ('-' === substr(strval($args[count($args) - 1]), 0, 1)) ? null : count($args) - 1));
+        $command = array_slice($args, count($optionsArgs))[0] ?? null;
+    } else {
+        $command = $args[0];
+        $optionsArgs = array_slice($args, 1);
+    }
+    $options = Options::load($optionsArgs);
+    // #endregion Load command line arguments and options
+
+    if ($options->has('help') || $options->has('h')) {
+        echo help_function();
+        return;
+    }
+
+    $path = $options->get('input', null);
+    if (null === $path) {
+        echo help_function();
+        return;
+    }
+    $path = auth_sdk_resolve_path($path, $options->get('baseDir', __DIR__));
+    // Checks if the specified path point to a valid file
+    if (!is_file($path)) {
+        echo Console::white(sprintf("%s is not a file ressource", $path), null, 'red') . PHP_EOL . PHP_EOL;
+        return;
+    }
+
+    // Load environment and configure environment repository
+    if ($options->has('env')) {
+        if (!is_file($envPath = $options->get('env'))) {
+            echo Console::white(sprintf("%s environement file is not not a file resource", $path), null, 'red') . PHP_EOL . PHP_EOL;
+            return;
+        }
+        $dirname = dirname($envPath);
+        $name = basename($envPath);
+        load_env($dirname, $name, ['_bearerToken', '_host']);
+    } else {
+        $dirname = dirname($path);
+        load_env($dirname, '.env', ['_bearerToken', '_host']);
+    }
+
+    // Load environment variables
+    EnvRepository::load($_ENV);
+
+    // READ json document
+    $values = read_json($path);
+
+    // Set the memory limit for the current script execution
+    ini_set('memory_limit', '-1');
+    set_time_limit(0);
+
+    switch (strtolower($command)) {
+        case 'authorizations':
+            // Create list of authorizations
+            auth_sdk_create_authorizations($values);
+            break;
+        case 'groups':
+            auth_sdk_create_groups($values);
+            break;
+        case 'users':
+            auth_sdk_create_users($values);
+            break;
+        default:
+            help_function();
+            break;
+    }
+}
+
+main(array_slice($argv, 1));
