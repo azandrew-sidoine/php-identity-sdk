@@ -391,7 +391,7 @@ function main(array $args = [])
     // Load environment and configure environment repository
     if ($options->has('env')) {
         if (!is_file($envPath = $options->get('env'))) {
-            echo Console::white(sprintf("%s environement file is not not a file resource", $path), null, 'red') . PHP_EOL . PHP_EOL;
+            echo Console::white(sprintf("%s environement file is not a file resource", $envPath), null, 'red') . PHP_EOL . PHP_EOL;
             return;
         }
         $dirname = dirname($envPath);
