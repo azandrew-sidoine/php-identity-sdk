@@ -222,7 +222,7 @@ function auth_sdk_create_groups($values)
         }
         try {
 
-            if (!empty($result = auth_sdk_get_groups($value['label']))) {
+            if (!empty(auth_sdk_get_groups($value['label']))) {
                 printf("Group %s already exists, processing next request...\n", Console::white($value['label'], null, 'blue'));
                 continue;
             }
@@ -236,6 +236,12 @@ function auth_sdk_create_groups($values)
                     return null !== $item;
                 }));
             }
+
+            if (empty($authorizations)) {
+                printf("No authorizations provided or provided authorizations cannot be found for (%s) group, processing next group\n\n", Console::white($value['label'] ?? 'Unknown', null, 'blue'));
+                continue;
+            }
+
             printf("Creating %s authorization group...\n", $value['label']);
             // TODO create authorization group
             $response = API::groups()
@@ -246,7 +252,7 @@ function auth_sdk_create_groups($values)
                     ->setAuthorizations($authorizations)
                     ->build());
         } catch (\Drewlabs\Curl\REST\Exceptions\BadRequestException $e) {
-            printf("\nResponse: %s\n", "/POST api/v2/authorizations");
+            printf("\nResponse: %s\n", "/POST api/v2/authorization-groups");
             printf("\tStatus Code: %d\n", $e->getResponse()->getStatus());
             printf("\tReason Phrase:\n", $e->getResponse()->getStatusText());
             continue;
@@ -376,12 +382,13 @@ function main(array $args = [])
         return;
     }
 
+    $baseDir = $options->get('baseDir', __DIR__);
     $path = $options->get('input', null);
     if (null === $path) {
         echo help_function();
         return;
     }
-    $path = auth_sdk_resolve_path($path, $options->get('baseDir', __DIR__));
+    $path = auth_sdk_resolve_path($path, $baseDir);
     // Checks if the specified path point to a valid file
     if (!is_file($path)) {
         echo Console::white(sprintf("%s is not a file ressource", $path), null, 'red') . PHP_EOL . PHP_EOL;
@@ -390,7 +397,8 @@ function main(array $args = [])
 
     // Load environment and configure environment repository
     if ($options->has('env')) {
-        if (!is_file($envPath = $options->get('env'))) {
+        $envPath = auth_sdk_resolve_path($options->get('env'), $baseDir);
+        if (!is_file($envPath)) {
             echo Console::white(sprintf("%s environement file is not a file resource", $envPath), null, 'red') . PHP_EOL . PHP_EOL;
             return;
         }
