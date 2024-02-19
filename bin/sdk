@@ -336,7 +336,7 @@ function auth_sdk_create_users($values = [])
             if ($user) {
                 printf("\nRequest result: \n");
                 printf("\tID : %d, Label: %s\n", $user->id, $user->username);
-                return;
+                continue;
             }
             printf("No user created or updated, please check your configuration for object at %d\n", $userId);
         } catch (\Drewlabs\Curl\REST\Exceptions\BadRequestException $e) {
